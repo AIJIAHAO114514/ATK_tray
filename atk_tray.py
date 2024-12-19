@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import hid
 from PIL import Image, ImageDraw, ImageFont
 import wx
-from wx.adv import TaskBarIcon
+from wx.adv import TaskBarIcon, NotificationMessage
 
 logging.basicConfig(level=logging.INFO)
 
@@ -19,7 +19,7 @@ BLUE = (91, 184, 255)
 YELLOW = (255, 255, 0)
 
 # Settings
-poll_rate = 60
+poll_rate = 2
 foreground_color = BLUE
 background_color = (0, 0, 0, 0)
 font = "consola.ttf"
@@ -57,7 +57,7 @@ def get_battery(mouse: MouseClass):
     try:
         device_path = get_device_path(mouse.vid, mouse.pid_wireless, mouse.pid_wired, mouse.usage_page, mouse.usage)
     except RuntimeError:
-        return None
+        return
     device.open_path(device_path)
     report = [0] * 17
     report[0] = 8  # Report ID
@@ -71,7 +71,7 @@ def get_battery(mouse: MouseClass):
     device.close()
     battery = res[6]
     wired = res[7]
-    logging.info(f"Battery: {battery}")
+    logging.info(f"Battery: {battery}, Wired: {bool(wired)}")
     return battery, wired
 
 
@@ -153,6 +153,9 @@ class MyFrame(wx.Frame):
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         self.Centre()
 
+        self.notification = NotificationMessage(title=mouse.model, message="Charged 100%")
+        self.notification.SetFlags(wx.ICON_INFORMATION)
+        self.notification.UseTaskBarIcon(self.tray_icon)
         self.animation_thread = threading.Thread(target=self.charge_animation, daemon=True)
         self.thread = threading.Thread(target=self.thread_worker, daemon=True)
         self.thread.start()
@@ -162,6 +165,7 @@ class MyFrame(wx.Frame):
             self.Hide()
 
     def thread_worker(self):
+        self.fullcharged = False
         while True:
             self.show_battery()
             if self.battery_str == "-" or self.wired:
@@ -185,6 +189,7 @@ class MyFrame(wx.Frame):
         self.wired = wired
 
         if wired and battery < 100:
+            self.fullcharged = False
             self.stop_animation = False
             if not self.animation_thread.is_alive():
                 self.animation_thread.start()
@@ -195,9 +200,13 @@ class MyFrame(wx.Frame):
             if self.animation_thread.is_alive():
                 self.animation_thread.join()
             self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100_green.ico")), mouse.model)
+            if not self.fullcharged:
+                self.fullcharged = True
+                self.notification.Show(timeout=wx.adv.NotificationMessage.Timeout_Auto)
             return
 
         if battery == 100 and not wired:
+            self.fullcharged = False
             self.stop_animation = True
             self.battery_str = str(battery)
             if self.animation_thread.is_alive():
@@ -205,6 +214,7 @@ class MyFrame(wx.Frame):
             self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100.ico")), mouse.model)
             return
 
+        self.fullcharged = False
         self.stop_animation = True
         if self.animation_thread.is_alive():
             self.animation_thread.join()
