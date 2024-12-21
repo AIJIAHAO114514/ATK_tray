@@ -19,7 +19,7 @@ BLUE = (91, 184, 255)
 YELLOW = (255, 255, 0)
 
 # Settings
-poll_rate = 2
+poll_rate = 60
 foreground_color = BLUE
 background_color = (0, 0, 0, 0)
 font = "consola.ttf"
