@@ -10,6 +10,8 @@ from PIL import Image, ImageDraw, ImageFont
 import wx
 from wx.adv import TaskBarIcon, NotificationMessage
 
+import models
+
 logging.basicConfig(level=logging.INFO)
 
 # Colors
@@ -24,25 +26,7 @@ foreground_color = BLUE
 background_color = (0, 0, 0, 0)
 font = "consola.ttf"
 
-
-@dataclass
-class MouseClass:
-    model: str
-    vid: int
-    pid_wireless: int
-    pid_wired: int
-    usage_page: int
-    usage: int
-
-
-atk_f1_ultimate = MouseClass(model="ATK F1 Ultimate", vid=0x373B, pid_wireless=0x1031, pid_wired=0x102E, usage_page=0xFF02, usage=0x0002)
-vxe_mad_r = MouseClass(model="VXE Mad R", vid=0x373B, pid_wireless=0x104D, pid_wired=0x103F, usage_page=0xFF02, usage=0x0002)
-vxe_r1_pro_max = MouseClass(model="VXE R1 Pro Max", vid=0x3554, pid_wireless=0xF58A, pid_wired=0xF58C, usage_page=0xFF02, usage=0x0002)
-vxe_r1_se_plus = MouseClass(model="VXE R1 SE+", vid=0x3554, pid_wireless=0xF58E, pid_wired=0xF58F, usage_page=0xFF02, usage=0x0002)
-vgn_f1_pro = MouseClass(model="VGN F1 Pro", vid=0x3554, pid_wireless=0xF503, pid_wired=0xF502, usage_page=0xFF02, usage=0x0002)
-
-mouse = vxe_mad_r
-
+mouse = models.vxe_mad_r_major_plus
 
 def get_resource(relative_path):
     try:
@@ -52,7 +36,7 @@ def get_resource(relative_path):
     return os.path.join(base_path, relative_path)
 
 
-def get_battery(mouse: MouseClass):
+def get_battery(mouse: models.MouseClass):
     device = hid.device()
     try:
         device_path = get_device_path(mouse.vid, mouse.pid_wireless, mouse.pid_wired, mouse.usage_page, mouse.usage)
