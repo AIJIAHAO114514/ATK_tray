@@ -3,7 +3,6 @@ import os
 import logging
 import time
 import threading
-from dataclasses import dataclass
 
 import hid
 from PIL import Image, ImageDraw, ImageFont
@@ -27,6 +26,7 @@ background_color = (0, 0, 0, 0)
 font = "consola.ttf"
 
 mouse = models.vxe_mad_r_major_plus
+
 
 def get_resource(relative_path):
     try:
