@@ -3,11 +3,13 @@ import os
 import logging
 import time
 import threading
+import winreg
 
 import hid
 from PIL import Image, ImageDraw, ImageFont
 import wx
 from wx.adv import TaskBarIcon, NotificationMessage
+from datetime import datetime, timedelta
 
 import models
 
@@ -34,6 +36,39 @@ def get_resource(relative_path):
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
+
+
+def save_reg(data):
+    soft = winreg.OpenKeyEx(winreg.HKEY_CURRENT_USER, "SOFTWARE")
+    key = winreg.CreateKey(soft, "ATK_Tray")
+    winreg.SetValueEx(key, "FullchargeDate", 0, winreg.REG_SZ, data)
+    if key:
+        winreg.CloseKey(key)
+
+
+def get_reg(name, reg_path):
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_READ)
+        value = winreg.QueryValueEx(key, name)[0]
+        winreg.CloseKey(key)
+        return datetime.strptime(value, "%d.%m.%Y %H:%M:%S")
+    except WindowsError:
+        return None
+
+
+def format_timedelta(delta: timedelta) -> str:
+    # Получаем дни
+    days = delta.days
+
+    # Получаем общее количество секунд (без учёта дней)
+    total_seconds = int(delta.total_seconds()) - days * 86400  # 86400 секунд в одном дне
+
+    # Вычисляем часы, минуты и секунды
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    # Форматируем строку
+    return f"{days} days, {hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 def get_battery(mouse: models.MouseClass):
@@ -133,6 +168,7 @@ class MyFrame(wx.Frame):
         self.SetSize((350, 250))
         self.tray_icon = MyTaskBarIcon(self)
         self.tray_icon.SetIcon(create_icon(" ", foreground_color, font), "")
+        self.full_charge_date = get_reg('FullchargeDate', R'SOFTWARE\ATK_Tray')
         self.battery_str = ""
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         self.Centre()
@@ -143,6 +179,14 @@ class MyFrame(wx.Frame):
         self.animation_thread = threading.Thread(target=self.charge_animation, daemon=True)
         self.thread = threading.Thread(target=self.thread_worker, daemon=True)
         self.thread.start()
+
+    def get_tooltip(self):
+        if self.full_charge_date:
+            delta = datetime.now() - self.full_charge_date
+            logging.info("Since last full charge: " + format_timedelta(delta))
+            return mouse.model + f"\n{format_timedelta(delta)}"
+        else:
+            return mouse.model
 
     def OnClose(self, event):
         if self.IsShown():
@@ -183,34 +227,37 @@ class MyFrame(wx.Frame):
             self.stop_animation = True
             if self.animation_thread.is_alive():
                 self.animation_thread.join()
-            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100_green.ico")), mouse.model)
+            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100_green.ico")), self.get_tooltip())
             if not self.fullcharged:
                 self.fullcharged = True
                 self.notification.Show(timeout=wx.adv.NotificationMessage.Timeout_Auto)
             return
 
         if battery == 100 and not wired:
+            if self.fullcharged:
+                self.full_charge_date = datetime.now()
+                save_reg(self.full_charge_date.strftime("%d.%m.%Y %H:%M:%S"))
             self.fullcharged = False
             self.stop_animation = True
             self.battery_str = str(battery)
             if self.animation_thread.is_alive():
                 self.animation_thread.join()
-            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100.ico")), mouse.model)
+            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100.ico")), self.get_tooltip())
             return
 
         self.fullcharged = False
         self.stop_animation = True
         if self.animation_thread.is_alive():
             self.animation_thread.join()
-        self.tray_icon.SetIcon(create_icon(self.battery_str, foreground_color, font), mouse.model)
+        self.tray_icon.SetIcon(create_icon(self.battery_str, foreground_color, font), self.get_tooltip())
 
     def charge_animation(self):
         while not self.stop_animation:
-            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_0.ico")), mouse.model)
+            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_0.ico")), self.get_tooltip())
             time.sleep(0.5)
-            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_50.ico")), mouse.model)
+            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_50.ico")), self.get_tooltip())
             time.sleep(0.5)
-            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100.ico")), mouse.model)
+            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100.ico")), self.get_tooltip())
             time.sleep(0.5)
 
 
