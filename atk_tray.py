@@ -186,6 +186,7 @@ class MyFrame(wx.Frame):
             logging.info("Since last full charge: " + format_timedelta(delta))
             return mouse.model + f"\n{format_timedelta(delta)}"
         else:
+            logging.info("No full charge date")
             return mouse.model
 
     def OnClose(self, event):
