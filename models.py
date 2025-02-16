@@ -1,13 +1,6 @@
 from dataclasses import dataclass
 
-__all__ = [
-    "atk_f1_ultimate",
-    "vxe_mad_r",
-    "vxe_mad_r_major_plus",
-    "vxe_r1_pro_max",
-    "vxe_r1_se_plus",
-    "vgn_f1_pro",
-]
+__all__ = ["atk_mice", "MouseClass"]
 
 
 @dataclass
@@ -29,7 +22,7 @@ atk_f1_ultimate = MouseClass(
     usage=0x0002,
 )
 vxe_mad_r = MouseClass(
-    model="VXE Mad R",
+    model="VXE MAD R",
     vid=0x373B,
     pid_wireless=0x104D,
     pid_wired=0x103F,
@@ -68,3 +61,12 @@ vgn_f1_pro = MouseClass(
     usage_page=0xFF02,
     usage=0x0002,
 )
+
+atk_mice = [
+    atk_f1_ultimate,
+    vxe_mad_r,
+    vxe_mad_r_major_plus,
+    vxe_r1_pro_max,
+    vxe_r1_se_plus,
+    vgn_f1_pro,
+]

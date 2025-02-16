@@ -27,8 +27,6 @@ foreground_color = BLUE
 background_color = (0, 0, 0, 0)
 font = "consola.ttf"
 
-mouse = models.vxe_mad_r_major_plus
-
 
 def get_resource(relative_path):
     try:
@@ -69,6 +67,15 @@ def format_timedelta(delta: timedelta) -> str:
 
     # Форматируем строку
     return f"{days} days, {hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def detect_mouse():
+    for mouse in models.atk_mice:
+        wireless = hid.enumerate(mouse.vid, mouse.pid_wireless)
+        wired = hid.enumerate(mouse.vid, mouse.pid_wired)
+        if wireless or wired:
+            logging.info(f"Detected model: {mouse.model}")
+            return mouse
 
 
 def get_battery(mouse: models.MouseClass):
@@ -172,8 +179,9 @@ class MyFrame(wx.Frame):
         self.battery_str = ""
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         self.Centre()
+        self.mouse = detect_mouse()
 
-        self.notification = NotificationMessage(title=mouse.model, message="Charged 100%")
+        self.notification = NotificationMessage(title=self.mouse.model, message="Charged 100%")
         self.notification.SetFlags(wx.ICON_INFORMATION)
         self.notification.UseTaskBarIcon(self.tray_icon)
         self.animation_thread = threading.Thread(target=self.charge_animation, daemon=True)
@@ -184,10 +192,10 @@ class MyFrame(wx.Frame):
         if self.full_charge_date:
             delta = datetime.now() - self.full_charge_date
             logging.info("Since last full charge: " + format_timedelta(delta))
-            return mouse.model + f"\n{format_timedelta(delta)}"
+            return self.mouse.model + f"\n{format_timedelta(delta)}"
         else:
             logging.info("No full charge date")
-            return mouse.model
+            return self.mouse.model
 
     def OnClose(self, event):
         if self.IsShown():
@@ -203,7 +211,7 @@ class MyFrame(wx.Frame):
                 time.sleep(poll_rate)
 
     def show_battery(self):
-        result = get_battery(mouse)
+        result = get_battery(self.mouse)
 
         if result is None:
             self.stop_animation = True
