@@ -3,4 +3,8 @@
 !atk_tray.py
 !models.py
 !requirements.txt
-!icons/*
+!README.md
+!icons/
+!icons/**
+!images/
+!images/**
