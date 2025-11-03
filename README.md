@@ -17,7 +17,6 @@ You can modify these settings variables:
 4. `font` - font of digital indicator. Default: `consola.ttf`.
 
 ## Supported models
-Currently script supports this models:
  - ATK F1 Ultimate
  - VXE MAD R
  - VXE MAD R Major Plus

@@ -55,17 +55,11 @@ def get_reg(name, reg_path):
 
 
 def format_timedelta(delta: timedelta) -> str:
-    # Получаем дни
+    """Format timedelta to string like '1 days, 23:59:59'"""
     days = delta.days
-
-    # Получаем общее количество секунд (без учёта дней)
-    total_seconds = int(delta.total_seconds()) - days * 86400  # 86400 секунд в одном дне
-
-    # Вычисляем часы, минуты и секунды
+    total_seconds = int(delta.total_seconds()) - days * 86400  # 86400 seconds in one day
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
-
-    # Форматируем строку
     return f"{days} days, {hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
