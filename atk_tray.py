@@ -102,12 +102,11 @@ def get_device_path(vid, pid_wireless, pid_wired, usage_page, usage):
         if not device_list:
             raise RuntimeError(f"The specified device ({vid:X}:{pid_wireless:X} or {vid:X}:{pid_wired:X}) cannot be found.")
     for device in device_list:
-        if device['usage_page'] == usage_page and device['usage'] == usage:
-            return device['path']
+        if device["usage_page"] == usage_page and device["usage"] == usage:
+            return device["path"]
 
 
 def create_icon(text: str, color, font):
-
     def PIL2wx(image):
         """Convert PIL Image to wxPython Bitmap"""
         width, height = image.size
@@ -133,7 +132,6 @@ def create_icon(text: str, color, font):
 
 
 class MyTaskBarIcon(TaskBarIcon):
-
     def __init__(self, frame):
         super().__init__()
         self.frame = frame
@@ -143,9 +141,12 @@ class MyTaskBarIcon(TaskBarIcon):
         menu = wx.Menu()
         item_settings = wx.MenuItem(menu, wx.ID_ANY, "Settings")
         self.Bind(wx.EVT_MENU, self.OnTaskBarActivate, id=item_settings.GetId())
+        item_reset_timer = wx.MenuItem(menu, wx.ID_ANY, "Reset timer")
+        self.Bind(wx.EVT_MENU, self.OnResetTimer, id=item_reset_timer.GetId())
         item_exit = wx.MenuItem(menu, wx.ID_ANY, "Exit")
         self.Bind(wx.EVT_MENU, self.OnTaskBarExit, id=item_exit.GetId())
         # menu.Append(item_settings)
+        menu.Append(item_reset_timer)
         menu.Append(item_exit)
         return menu
 
@@ -157,19 +158,23 @@ class MyTaskBarIcon(TaskBarIcon):
         self.Destroy()
         self.frame.Destroy()
 
+    def OnResetTimer(self, exent):
+        self.frame.full_charge_date = datetime.now()
+        save_reg(self.frame.full_charge_date.strftime("%d.%m.%Y %H:%M:%S"))
+        logging.info(f"Reset full charge date to: {self.frame.full_charge_date}")
+
     def OnClick(self, event):
         if self.frame.battery_str == "Zzz" or self.frame.battery_str == "-":
             self.frame.show_battery()
 
 
 class MyFrame(wx.Frame):
-
     def __init__(self, parent, title):
         super().__init__(parent, title=title, pos=(-1, -1), size=(290, 280))
         self.SetSize((350, 250))
         self.tray_icon = MyTaskBarIcon(self)
         self.tray_icon.SetIcon(create_icon(" ", foreground_color, font), "")
-        self.full_charge_date = get_reg('FullchargeDate', R'SOFTWARE\ATK_Tray')
+        self.full_charge_date = get_reg("FullchargeDate", R"SOFTWARE\ATK_Tray")
         self.battery_str = ""
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         self.Centre()
@@ -240,6 +245,7 @@ class MyFrame(wx.Frame):
             if self.fullcharged:
                 self.full_charge_date = datetime.now()
                 save_reg(self.full_charge_date.strftime("%d.%m.%Y %H:%M:%S"))
+                logging.info(f"Reset full charge date to: {self.full_charge_date}")
             self.fullcharged = False
             self.stop_animation = True
             self.battery_str = str(battery)
@@ -265,9 +271,8 @@ class MyFrame(wx.Frame):
 
 
 class MyApp(wx.App):
-
     def OnInit(self):
-        frame = MyFrame(None, title='ATK Tray settings')
+        frame = MyFrame(None, title="ATK Tray settings")
         frame.Show(False)
         self.SetTopWindow(frame)
         return True
