@@ -1,18 +1,20 @@
-import sys
-import os
+import ctypes
 import logging
-import time
+import os
+import sys
 import threading
+import time
 import winreg
+from datetime import datetime, timedelta
 
 import hid
-from PIL import Image, ImageDraw, ImageFont
 import wx
-from wx.adv import TaskBarIcon, NotificationMessage
-from datetime import datetime, timedelta
+from PIL import Image, ImageDraw, ImageFont
+from wx.adv import NotificationMessage, TaskBarIcon
 
 import models
 
+ctypes.windll.shcore.SetProcessDpiAwareness(2)
 logging.basicConfig(level=logging.INFO)
 
 # Colors
