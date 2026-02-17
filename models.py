@@ -61,9 +61,18 @@ vgn_f1_pro = MouseClass(
     usage_page=0xFF02,
     usage=0x0002,
 )
+atk_a9_ultimate = MouseClass(
+    model="ATK A9 Ultimate",
+    vid=0x373B,
+    pid_wireless=0x11D9,
+    pid_wired=0x11B6,
+    usage_page=0xFF02,
+    usage=0x0002,
+)
 
 atk_mice = [
     atk_f1_ultimate,
+    atk_a9_ultimate,
     vxe_mad_r,
     vxe_mad_r_major_plus,
     vxe_r1_pro_max,

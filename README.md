@@ -18,6 +18,7 @@ You can modify these settings variables:
 
 ## Supported models
  - ATK F1 Ultimate
+ - ATK A9 Ultimate
  - VXE MAD R
  - VXE MAD R Major Plus
  - VXE R1 Pro Max
