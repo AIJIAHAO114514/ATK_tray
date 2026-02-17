@@ -8,3 +8,7 @@
 !icons/**
 !images/
 !images/**
+!pyproject.toml
+!uv.lock
+!.python-version
+!make_release.py
