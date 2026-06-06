@@ -3,7 +3,7 @@ name = "atk-tray"
 version = "0.1.0"
 description = "ATK/VXE/VGN mice charge indicator"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
     "hidapi>=0.15.0",
     "pillow>=12.1.1",
