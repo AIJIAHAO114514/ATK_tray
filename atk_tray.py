@@ -94,6 +94,38 @@ def get_reg(name: str, reg_path: str) -> datetime | None:
         return None
 
 
+# ── Autostart helpers ───────────────────────────────────────────────
+
+RUN_KEY = R"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_NAME = "ATK_tray"
+
+
+def is_autostart_enabled() -> bool:
+    """Check if autostart entry exists in the registry."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_READ) as key:
+            winreg.QueryValueEx(key, RUN_NAME)
+        return True
+    except OSError:
+        return False
+
+
+def enable_autostart() -> None:
+    """Add this exe to HKCU\\...\\Run for automatic startup."""
+    exe_path = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+        winreg.SetValueEx(key, RUN_NAME, 0, winreg.REG_SZ, f'"{exe_path}"')
+
+
+def disable_autostart() -> None:
+    """Remove the autostart registry entry."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, RUN_NAME)
+    except OSError:
+        pass  # already removed
+
+
 def format_timedelta(delta: timedelta) -> str:
     """Pretty-print a timedelta, e.g. ``2 days, 05:33:00``."""
     days = delta.days
@@ -270,12 +302,17 @@ class MyTaskBarIcon(TaskBarIcon):
 
     def CreatePopupMenu(self) -> wx.Menu:
         menu = wx.Menu()
+        self.item_autostart = wx.MenuItem(menu, wx.ID_ANY, "Run at startup", kind=wx.ITEM_CHECK)
+        self.Bind(wx.EVT_MENU, self.OnToggleAutostart, id=self.item_autostart.GetId())
         item_reset = wx.MenuItem(menu, wx.ID_ANY, "Reset timer")
         self.Bind(wx.EVT_MENU, self.OnResetTimer, id=item_reset.GetId())
         item_exit = wx.MenuItem(menu, wx.ID_ANY, "Exit")
         self.Bind(wx.EVT_MENU, self.OnTaskBarExit, id=item_exit.GetId())
+        menu.Append(self.item_autostart)
+        menu.AppendSeparator()
         menu.Append(item_reset)
         menu.Append(item_exit)
+        self.sync_autostart_check()
         return menu
 
     def OnTaskBarExit(self, event: wx.MenuEvent) -> None:
@@ -292,6 +329,17 @@ class MyTaskBarIcon(TaskBarIcon):
         """Left-click: force a battery refresh if display is stale."""
         if self.frame.battery_str == "-":
             self.frame.show_battery()
+
+    def OnToggleAutostart(self, event: wx.MenuEvent) -> None:
+        """Toggle autostart registry entry."""
+        if self.item_autostart.IsChecked():
+            enable_autostart()
+        else:
+            disable_autostart()
+
+    def sync_autostart_check(self) -> None:
+        """Sync the menu checkmark with the registry state."""
+        self.item_autostart.Check(is_autostart_enabled())
 
 
 class MyFrame(wx.Frame):
