@@ -1,4 +1,4 @@
-Pillow
-wxPython
-hidapi
-pyinstaller
+Pillow>=12.0
+wxPython>=4.2
+hidapi>=0.14
+pyinstaller>=6.0
