@@ -59,3 +59,6 @@ python make_release.py
 - [Fan4Metal/ATK_tray](https://github.com/Fan4Metal/ATK_tray) — 原始项目
 - [DeepSeek](https://deepseek.com/) — AI 辅助开发与审计
 - [hidapi](https://github.com/libusb/hidapi) — HID 通信库 (BSD-3-Clause)
+
+## 许可
+`hidapi.dll` 遵循其 BSD-3-Clause 协议。
