@@ -25,10 +25,10 @@ ctypes.windll.shcore.SetProcessDpiAwareness(2)
 logging.basicConfig(level=logging.INFO)
 
 # ── Colours ────────────────────────────────────────────────────────
-RED    = (255, 0, 0)     # battery ≤ 20 %
-GREEN  = (71, 255, 12)   # battery ≥ 50 %
-BLUE   = (91, 184, 255)  # default / disconnected fallback
-YELLOW = (255, 255, 0)   # 21–49 %
+RED    = (255, 0, 0)     # battery < 10 %
+GREEN  = (71, 255, 12)   # (charging animation icons only)
+BLUE   = (91, 184, 255)  # battery ≥ 30 % / disconnected fallback
+YELLOW = (255, 255, 0)   # 10–29 %
 
 # ── User settings ───────────────────────────────────────────────────
 poll_rate = 15                       # seconds between polls (wireless)
@@ -63,7 +63,7 @@ def voltage_to_level(voltage: int, charging: bool) -> int:
     level = round((voltage - prev_v) / step + (idx - 1) * 5)
 
     if level in (0, 15):
-        level += 1
+        level += 1    # firmware reports 0 % / 15 % as 1 step too low on some models
 
     return min(level, 100)
 
@@ -72,28 +72,25 @@ def get_resource(relative_path: str) -> str:
     """Resolve a path relative to the script (or PyInstaller bundle)."""
     try:
         base_path = sys._MEIPASS          # PyInstaller temp directory
-    except Exception:
+    except AttributeError:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
 
 def save_reg(data: str) -> None:
     """Persist the last-full-charge timestamp in the registry."""
-    soft = winreg.OpenKeyEx(winreg.HKEY_CURRENT_USER, "SOFTWARE")
-    key = winreg.CreateKey(soft, "ATK_Tray")
-    winreg.SetValueEx(key, "FullchargeDate", 0, winreg.REG_SZ, data)
-    if key:
-        winreg.CloseKey(key)
+    with winreg.OpenKeyEx(winreg.HKEY_CURRENT_USER, "SOFTWARE") as soft:
+        with winreg.CreateKey(soft, "ATK_Tray") as key:
+            winreg.SetValueEx(key, "FullchargeDate", 0, winreg.REG_SZ, data)
 
 
 def get_reg(name: str, reg_path: str) -> datetime | None:
     """Read a persisted timestamp from the registry."""
     try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_READ)
-        value = winreg.QueryValueEx(key, name)[0]
-        winreg.CloseKey(key)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_READ) as key:
+            value = winreg.QueryValueEx(key, name)[0]
         return datetime.strptime(value, "%d.%m.%Y %H:%M:%S")
-    except WindowsError:
+    except OSError:
         return None
 
 
@@ -144,22 +141,21 @@ def get_battery(mouse: models.MouseClass) -> tuple[int, bool] | None:
             continue
 
         try:
-            device.write(bytes(report))
-        except Exception as e:
-            logging.warning("[attempt %d] write failed: %s", attempt + 1, e)
-            device.close()
-            time.sleep(0.5)
-            continue
+            try:
+                device.write(bytes(report))
+            except Exception as e:
+                logging.warning("[attempt %d] write failed: %s", attempt + 1, e)
+                time.sleep(0.5)
+                continue
 
-        try:
-            res = device.read(17, timeout=1000)
-        except Exception as e:
-            logging.warning("[attempt %d] read failed: %s", attempt + 1, e)
+            try:
+                res = device.read(17, timeout=1000)
+            except Exception as e:
+                logging.warning("[attempt %d] read failed: %s", attempt + 1, e)
+                time.sleep(0.5)
+                continue
+        finally:
             device.close()
-            time.sleep(0.5)
-            continue
-
-        device.close()
 
         if not res or len(res) < 10:
             logging.warning("[attempt %d] short (%d B)", attempt + 1, len(res) if res else 0)
@@ -294,7 +290,7 @@ class MyTaskBarIcon(TaskBarIcon):
 
     def OnClick(self, event: wx.TaskBarIconEvent) -> None:
         """Left-click: force a battery refresh if display is stale."""
-        if self.frame.battery_str in ("Zzz", "-"):
+        if self.frame.battery_str == "-":
             self.frame.show_battery()
 
 
@@ -307,7 +303,7 @@ class MyFrame(wx.Frame):
         self.tray_icon = MyTaskBarIcon(self)
         self.tray_icon.SetIcon(create_icon(" ", foreground_color, font), "")
         self.full_charge_date = get_reg("FullchargeDate", R"SOFTWARE\ATK_Tray")
-        self.battery_str = ""       # currently displayed value ("-", "Zzz", "95", …)
+        self.battery_str = ""       # currently displayed value ("-", "95", …)
         self.wired = False          # True while charging cable is connected
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         self.Centre()
@@ -391,9 +387,9 @@ class MyFrame(wx.Frame):
         self.wired = wired
 
         # Colour by charge level
-        if battery >= 50:
-            clr = GREEN
-        elif battery >= 20:
+        if battery >= 30:
+            clr = BLUE
+        elif battery >= 10:
             clr = YELLOW
         else:
             clr = RED
@@ -410,12 +406,12 @@ class MyFrame(wx.Frame):
             return
 
         if battery == 100 and wired:
-            # Fully charged on cable → solid green battery icon + notify once
+            # Fully charged on cable → solid blue battery icon + notify once
             self.stop_animation = True
             if self.animation_thread.is_alive():
                 self.animation_thread.join()
             self.tray_icon.SetIcon(
-                wx.Icon(get_resource(R".\icons\battery_100_green.ico")),
+                wx.Icon(get_resource(R".\icons\battery_100.ico")),
                 self.get_tooltip())
             if not self.fullcharged:
                 self.fullcharged = True
@@ -424,7 +420,7 @@ class MyFrame(wx.Frame):
             return
 
         if battery == 100 and not wired:
-            # Fully charged wireless → record timestamp, green icon
+            # Fully charged wireless → record timestamp, blue icon
             if self.fullcharged:
                 self.full_charge_date = datetime.now()
                 save_reg(self.full_charge_date.strftime("%d.%m.%Y %H:%M:%S"))
@@ -432,7 +428,7 @@ class MyFrame(wx.Frame):
             self.fullcharged = False
             self.stop_animation = True
             self.tray_icon.SetIcon(
-                wx.Icon(get_resource(R".\icons\battery_100_green.ico")),
+                wx.Icon(get_resource(R".\icons\battery_100.ico")),
                 self.get_tooltip())
             return
 

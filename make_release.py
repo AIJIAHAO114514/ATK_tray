@@ -2,10 +2,10 @@ import subprocess
 import sys
 
 
-def run_command(command, shell=False):
+def run_command(command):
     """Runs a command and checks the result"""
-    print(f"Running: {command}")
-    result = subprocess.run(command, shell=shell, capture_output=True, text=True, errors="replace")
+    print(f"Running: {' '.join(command)}")
+    result = subprocess.run(command, capture_output=True, text=True, errors="replace")
     if result.returncode != 0:
         print(f"Error: {result.stderr}")
         sys.exit(1)
@@ -17,18 +17,16 @@ def main():
     try:
         print("\n=== Starting PyInstaller ===")
         pyinstaller_cmd = [
-            "uv",
-            "run",
             "pyinstaller",
             "--clean",
             "--noconsole",
             "--noconfirm",
-            "--onedir",
+            "--onefile",
             "--icon=.\\icons\\vxe.ico",
             "--add-data=icons\\battery_0.ico;.\\icons",
             "--add-data=icons\\battery_50.ico;.\\icons",
             "--add-data=icons\\battery_100.ico;.\\icons",
-            "--add-data=icons\\battery_100_green.ico;.\\icons",
+            "--add-binary=hidapi.dll;.",     # ← 打包 hidapi.dll
             "--name=ATK_tray",
             "atk_tray.py",
         ]
