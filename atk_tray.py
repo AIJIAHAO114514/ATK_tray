@@ -1,3 +1,10 @@
+"""System tray battery indicator for ATK / VXE / VGN wireless mice.
+
+Polls the mouse HID Output Report (17 B) every ``poll_rate`` seconds,
+displays the battery percentage as a tray icon coloured by charge level,
+and plays a blinking animation while charging.
+"""
+
 import ctypes
 import logging
 import os
@@ -17,28 +24,61 @@ import models
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
 logging.basicConfig(level=logging.INFO)
 
-# Colors
-RED = (255, 0, 0)
-GREEN = (71, 255, 12)
-BLUE = (91, 184, 255)
-YELLOW = (255, 255, 0)
+# ── Colours ────────────────────────────────────────────────────────
+RED    = (255, 0, 0)     # battery ≤ 20 %
+GREEN  = (71, 255, 12)   # battery ≥ 50 %
+BLUE   = (91, 184, 255)  # default / disconnected fallback
+YELLOW = (255, 255, 0)   # 21–49 %
 
-# Settings
-poll_rate = 60
-foreground_color = BLUE
-background_color = (0, 0, 0, 0)
-font = "consola.ttf"
+# ── User settings ───────────────────────────────────────────────────
+poll_rate = 15                       # seconds between polls (wireless)
+foreground_color = BLUE              # colour when no device is connected
+background_color = (0, 0, 0, 0)      # RGBA – transparent
+font = "consola.ttf"                 # last-resort font file name
+
+# ── Voltage → percent lookup (from VGN firmware) ────────────────────
+# 21 thresholds spanning 3 050 mV … 4 110 mV in ~5 % steps.
+VOLTAGE_TABLE = [
+    3050, 3420, 3480, 3540, 3600, 3660, 3720, 3760, 3800, 3840,
+    3880, 3920, 3940, 3960, 3980, 4000, 4020, 4040, 4060, 4080, 4110,
+]
 
 
-def get_resource(relative_path):
+def voltage_to_level(voltage: int, charging: bool) -> int:
+    """Convert a battery voltage (mV) to a percentage (0‑100)."""
+    if voltage >= VOLTAGE_TABLE[-1]:
+        return 99 if charging else 100
+
+    idx = -1
+    for i, v in enumerate(VOLTAGE_TABLE):
+        if voltage < v:
+            idx = i
+            break
+
+    if idx <= 0:
+        return 0
+
+    prev_v = VOLTAGE_TABLE[idx - 1]
+    step = (VOLTAGE_TABLE[idx] - prev_v) / 5
+    level = round((voltage - prev_v) / step + (idx - 1) * 5)
+
+    if level in (0, 15):
+        level += 1
+
+    return min(level, 100)
+
+
+def get_resource(relative_path: str) -> str:
+    """Resolve a path relative to the script (or PyInstaller bundle)."""
     try:
-        base_path = sys._MEIPASS
+        base_path = sys._MEIPASS          # PyInstaller temp directory
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
 
-def save_reg(data):
+def save_reg(data: str) -> None:
+    """Persist the last-full-charge timestamp in the registry."""
     soft = winreg.OpenKeyEx(winreg.HKEY_CURRENT_USER, "SOFTWARE")
     key = winreg.CreateKey(soft, "ATK_Tray")
     winreg.SetValueEx(key, "FullchargeDate", 0, winreg.REG_SZ, data)
@@ -46,7 +86,8 @@ def save_reg(data):
         winreg.CloseKey(key)
 
 
-def get_reg(name, reg_path):
+def get_reg(name: str, reg_path: str) -> datetime | None:
+    """Read a persisted timestamp from the registry."""
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_READ)
         value = winreg.QueryValueEx(key, name)[0]
@@ -57,230 +98,380 @@ def get_reg(name, reg_path):
 
 
 def format_timedelta(delta: timedelta) -> str:
-    """Format timedelta to string like '1 days, 23:59:59'"""
+    """Pretty-print a timedelta, e.g. ``2 days, 05:33:00``."""
     days = delta.days
-    total_seconds = int(delta.total_seconds()) - days * 86400  # 86400 seconds in one day
+    total_seconds = int(delta.total_seconds()) - days * 86400
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{days} days, {hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def detect_mouse():
-    for mouse in models.atk_mice:
-        wireless = hid.enumerate(mouse.vid, mouse.pid_wireless)
-        wired = hid.enumerate(mouse.vid, mouse.pid_wired)
+def detect_mouse() -> models.MouseClass | None:
+    """Return the first supported mouse found on the USB bus."""
+    for m in models.atk_mice:
+        wireless = hid.enumerate(m.vid, m.pid_wireless)
+        wired_vid = m.vid_wired if m.vid_wired is not None else m.vid
+        wired = hid.enumerate(wired_vid, m.pid_wired)
         if wireless or wired:
-            logging.info(f"Detected model: {mouse.model}")
-            return mouse
+            logging.info("Detected model: %s", m.model)
+            return m
+    return None
 
 
-def get_battery(mouse: models.MouseClass):
-    device = hid.device()
+def get_battery(mouse: models.MouseClass) -> tuple[int, bool] | None:
+    """Query the mouse battery via Output Report → Input Report.
+
+    Returns ``(percent, charging)`` or ``None`` on failure.
+    Up to 3 attempts; each attempt opens the device fresh.
+    """
     try:
-        device_path = get_device_path(mouse.vid, mouse.pid_wireless, mouse.pid_wired, mouse.usage_page, mouse.usage)
-    except RuntimeError:
-        return
-    device.open_path(device_path)
-    report = [0] * 17
-    report[0] = 8  # Report ID
-    report[1] = 4
-    report[16] = 73
-    logging.info(f"Sending report:  {report}")
-    device.write(report)
-    time.sleep(0.1)
-    res = device.read(17)
-    logging.info(f"Recieved report: {res}")
-    device.close()
-    battery = res[6]
-    wired = res[7]
-    logging.info(f"Battery: {battery}, Wired: {bool(wired)}")
-    return battery, wired
+        device_path = get_device_path(mouse)
+    except RuntimeError as e:
+        logging.warning("get_device_path failed: %s", e)
+        return None
+
+    report = bytearray(17)
+    report[0] = 8          # HID Report ID
+    report[1] = 4          # command = BatteryLevel
+    report[16] = mouse.battery_crc
+
+    for attempt in range(3):
+        try:
+            device = hid.Device(path=device_path)
+        except Exception as e:
+            logging.warning("[attempt %d] open failed: %s", attempt + 1, e)
+            time.sleep(0.5)
+            continue
+
+        try:
+            device.write(bytes(report))
+        except Exception as e:
+            logging.warning("[attempt %d] write failed: %s", attempt + 1, e)
+            device.close()
+            time.sleep(0.5)
+            continue
+
+        try:
+            res = device.read(17, timeout=1000)
+        except Exception as e:
+            logging.warning("[attempt %d] read failed: %s", attempt + 1, e)
+            device.close()
+            time.sleep(0.5)
+            continue
+
+        device.close()
+
+        if not res or len(res) < 10:
+            logging.warning("[attempt %d] short (%d B)", attempt + 1, len(res) if res else 0)
+            time.sleep(0.5)
+            continue
+
+        # Wire format (aligned with VGN firmware receivedData):
+        #   res[0]  = reportId (8)
+        #   res[1]  = command  (4)
+        #   res[6]  = raw battery %  (receivedData[5])
+        #   res[7]  = charging flag   (receivedData[6])
+        #   res[8:10] = voltage (mV, big-endian)
+        raw_level = res[6]
+        charging = res[7] == 1
+        voltage = (res[8] << 8) | res[9]
+
+        if voltage > 0:
+            level = voltage_to_level(voltage, charging)
+        else:
+            logging.info("Voltage=0, skipping (device may be switching modes)")
+            return None
+
+        logging.info("Raw=%d %%  V=%d mV  →  %d %%  Charging=%s",
+                     raw_level, voltage, level, charging)
+        return level, charging
+
+    logging.warning("All 3 attempts failed")
+    return None
 
 
-def get_device_path(vid, pid_wireless, pid_wired, usage_page, usage):
-    device_list = hid.enumerate(vid, pid_wireless)
+def get_device_path(mouse: models.MouseClass) -> str:
+    """Resolve the HID device path for *mouse* (wireless first, then wired)."""
+    device_list = hid.enumerate(mouse.vid, mouse.pid_wireless)
     if not device_list:
-        device_list = hid.enumerate(vid, pid_wired)
+        wired_vid = mouse.vid_wired if mouse.vid_wired is not None else mouse.vid
+        device_list = hid.enumerate(wired_vid, mouse.pid_wired)
         if not device_list:
-            raise RuntimeError(f"The specified device ({vid:X}:{pid_wireless:X} or {vid:X}:{pid_wired:X}) cannot be found.")
-    for device in device_list:
-        if device["usage_page"] == usage_page and device["usage"] == usage:
-            return device["path"]
+            raise RuntimeError(
+                f"Device not found: ({mouse.vid:04X}:{mouse.pid_wireless:04X} "
+                f"or {wired_vid:04X}:{mouse.pid_wired:04X})"
+            )
+    for d in device_list:
+        if d["usage_page"] == mouse.usage_page and d["usage"] == mouse.usage:
+            return d["path"]
+    raise RuntimeError(
+        f"No matching usage for {mouse.model}. "
+        f"Available: {[(d.get('usage_page'), d.get('usage')) for d in device_list]}"
+    )
 
 
-def create_icon(text: str, color, font):
-    def PIL2wx(image):
-        """Convert PIL Image to wxPython Bitmap"""
-        width, height = image.size
-        return wx.Bitmap.FromBufferRGBA(width, height, image.tobytes())
+# ── Icon helpers ────────────────────────────────────────────────────
 
-    def get_text_pos_size(text):
-        if len(text) == 3:
-            return (0, 58), 150
-        elif len(text) == 2:
-            return (8, 32), 220
-        elif len(text) == 1:
-            return (70, 32), 220
+def _get_font_size(text: str) -> int:
+    """Return a font size (px) that fits 1‑3 digit text into a 256×256 icon."""
+    if len(text) == 3:
+        return 150
+    if len(text) == 2:
+        return 220
+    return 220     # 1 digit or unexpected
 
-    image = Image.new(mode="RGBA", size=(256, 256), color=background_color)
-    # Call draw Method to add 2D graphics in an image
-    I1 = ImageDraw.Draw(image)
-    # Custom font style and font size
-    text_pos, size = get_text_pos_size(text)
-    myFont = ImageFont.truetype(font, size)
-    # Add Text to an image
-    I1.text(text_pos, text, font=myFont, fill=color)
-    return PIL2wx(image)
 
+def _pil_to_wx(image: Image.Image) -> wx.Bitmap:
+    """Convert a Pillow RGBA image to a wxPython bitmap."""
+    w, h = image.size
+    return wx.Bitmap.FromBufferRGBA(w, h, image.tobytes())
+
+
+def create_icon(text: str, color: tuple[int, int, int],
+                font_name: str) -> wx.Bitmap:
+    """Render *text* with a bold outlined font onto a 256×256 RGBA icon."""
+    image = Image.new("RGBA", (256, 256), background_color)
+    draw = ImageDraw.Draw(image)
+    size = _get_font_size(text)
+
+    # Font priority: Segoe UI Bold → Consolas Bold → user font → Pillow default
+    try:
+        fnt = ImageFont.truetype("segoeuib.ttf", size)
+    except Exception:
+        try:
+            fnt = ImageFont.truetype("consolab.ttf", size)
+        except Exception:
+            try:
+                fnt = ImageFont.truetype(font_name, size)
+            except Exception:
+                fnt = ImageFont.load_default()
+
+    # Centre the text using its bounding box
+    bbox = draw.textbbox((0, 0), text, font=fnt)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    x = (256 - tw) // 2 - bbox[0]
+    y = (256 - th) // 2 - bbox[1] - 10
+
+    # Dark outline + coloured fill for legibility at tray size
+    outline = (0, 0, 0, 180)
+    draw.text((x, y), text, font=fnt, fill=outline,
+              stroke_width=3, stroke_fill=outline)
+    draw.text((x, y), text, font=fnt, fill=color,
+              stroke_width=1, stroke_fill=color)
+    return _pil_to_wx(image)
+
+
+# ── wxPython UI ─────────────────────────────────────────────────────
 
 class MyTaskBarIcon(TaskBarIcon):
-    def __init__(self, frame):
+    """Windows system tray icon with popup menu."""
+
+    def __init__(self, frame: "MyFrame") -> None:
         super().__init__()
         self.frame = frame
         self.Bind(wx.adv.EVT_TASKBAR_LEFT_DOWN, self.OnClick)
 
-    def CreatePopupMenu(self):
+    def CreatePopupMenu(self) -> wx.Menu:
         menu = wx.Menu()
-        item_settings = wx.MenuItem(menu, wx.ID_ANY, "Settings")
-        self.Bind(wx.EVT_MENU, self.OnTaskBarActivate, id=item_settings.GetId())
-        item_reset_timer = wx.MenuItem(menu, wx.ID_ANY, "Reset timer")
-        self.Bind(wx.EVT_MENU, self.OnResetTimer, id=item_reset_timer.GetId())
+        item_reset = wx.MenuItem(menu, wx.ID_ANY, "Reset timer")
+        self.Bind(wx.EVT_MENU, self.OnResetTimer, id=item_reset.GetId())
         item_exit = wx.MenuItem(menu, wx.ID_ANY, "Exit")
         self.Bind(wx.EVT_MENU, self.OnTaskBarExit, id=item_exit.GetId())
-        # menu.Append(item_settings)
-        menu.Append(item_reset_timer)
+        menu.Append(item_reset)
         menu.Append(item_exit)
         return menu
 
-    def OnTaskBarActivate(self, event):
-        if not self.frame.IsShown():
-            self.frame.Show()
-
-    def OnTaskBarExit(self, event):
+    def OnTaskBarExit(self, event: wx.MenuEvent) -> None:
         self.Destroy()
         self.frame.Destroy()
 
-    def OnResetTimer(self, exent):
+    def OnResetTimer(self, event: wx.MenuEvent) -> None:
+        """Manually reset the 'time since last full charge' counter."""
         self.frame.full_charge_date = datetime.now()
         save_reg(self.frame.full_charge_date.strftime("%d.%m.%Y %H:%M:%S"))
-        logging.info(f"Reset full charge date to: {self.frame.full_charge_date}")
+        logging.info("Reset full charge date → %s", self.frame.full_charge_date)
 
-    def OnClick(self, event):
-        if self.frame.battery_str == "Zzz" or self.frame.battery_str == "-":
+    def OnClick(self, event: wx.TaskBarIconEvent) -> None:
+        """Left-click: force a battery refresh if display is stale."""
+        if self.frame.battery_str in ("Zzz", "-"):
             self.frame.show_battery()
 
 
 class MyFrame(wx.Frame):
-    def __init__(self, parent, title):
+    """Hidden top-level window that owns the tray icon and worker threads."""
+
+    def __init__(self, parent: wx.Window | None, title: str) -> None:
         super().__init__(parent, title=title, pos=(-1, -1), size=(290, 280))
-        self.SetSize((350, 250))
+        self.SetSize(350, 250)
         self.tray_icon = MyTaskBarIcon(self)
         self.tray_icon.SetIcon(create_icon(" ", foreground_color, font), "")
         self.full_charge_date = get_reg("FullchargeDate", R"SOFTWARE\ATK_Tray")
-        self.battery_str = ""
+        self.battery_str = ""       # currently displayed value ("-", "Zzz", "95", …)
+        self.wired = False          # True while charging cable is connected
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         self.Centre()
         self.mouse = detect_mouse()
 
-        self.notification = NotificationMessage(title=self.mouse.model, message="Charged 100%")
-        self.notification.SetFlags(wx.ICON_INFORMATION)
-        self.notification.UseTaskBarIcon(self.tray_icon)
-        self.animation_thread = threading.Thread(target=self.charge_animation, daemon=True)
-        self.thread = threading.Thread(target=self.thread_worker, daemon=True)
-        self.thread.start()
+        if self.mouse is None:
+            self.battery_str = "-"
+            self.tray_icon.SetIcon(
+                create_icon("-", foreground_color, font), "No Mouse Detected")
+        else:
+            self.notification = NotificationMessage(
+                title=self.mouse.model, message="Charged 100%")
+            self.notification.SetFlags(wx.ICON_INFORMATION)
+            self.notification.UseTaskBarIcon(self.tray_icon)
+            self.animation_thread = threading.Thread(
+                target=self.charge_animation, daemon=True)
+            self.thread = threading.Thread(
+                target=self.thread_worker, daemon=True)
+            self.thread.start()
 
-    def get_tooltip(self):
+    def get_tooltip(self) -> str:
+        """Build the hover tooltip (model name + time since last full charge)."""
         if self.full_charge_date:
             delta = datetime.now() - self.full_charge_date
-            logging.info("Since last full charge: " + format_timedelta(delta))
             return self.mouse.model + f"\n{format_timedelta(delta)}"
-        else:
-            logging.info("No full charge date")
-            return self.mouse.model
+        return self.mouse.model if self.mouse else "No Mouse"
 
-    def OnClose(self, event):
+    def OnClose(self, event: wx.CloseEvent) -> None:
+        """Hide the settings window instead of destroying it."""
         if self.IsShown():
             self.Hide()
 
-    def thread_worker(self):
-        self.fullcharged = False
-        while True:
-            self.show_battery()
-            if self.battery_str == "-" or self.wired:
-                time.sleep(1)
-            else:
-                time.sleep(poll_rate)
+    def thread_worker(self) -> None:
+        """Main polling loop.
 
-    def show_battery(self):
+        Normal wireless: ``poll_rate`` seconds.
+        Charging:         1 second (to drive the animation).
+        Disconnected:     3 seconds (fast re‑detect) × 5, then poll_rate.
+        Mode switch:      3 seconds (one accelerated cycle).
+        """
+        self.fullcharged = False
+        fail_count = 0
+        while True:
+            prev_wired = self.wired
+
+            self.show_battery()
+
+            if self.battery_str == "-":
+                fail_count += 1
+                wait = 3 if fail_count <= 5 else poll_rate
+            elif prev_wired and not self.wired:
+                fail_count = 0
+                wait = 3               # just unplugged – speed up once
+            else:
+                fail_count = 0
+                wait = 1 if self.wired else poll_rate
+
+            time.sleep(wait)
+
+    def show_battery(self) -> None:
+        """Read the battery and update the tray icon / tooltip."""
+        if self.mouse is None:
+            self.battery_str = "-"
+            self.tray_icon.SetIcon(
+                create_icon("-", foreground_color, font), "No Mouse Detected")
+            return
+
         result = get_battery(self.mouse)
 
         if result is None:
-            self.stop_animation = True
             self.battery_str = "-"
-            if self.animation_thread.is_alive():
+            if hasattr(self, "animation_thread") and self.animation_thread.is_alive():
+                self.stop_animation = True
                 self.animation_thread.join()
-            self.tray_icon.SetIcon(create_icon(self.battery_str, foreground_color, font), "No Mouse Detected")
+            self.tray_icon.SetIcon(
+                create_icon("-", foreground_color, font), "No Mouse Detected")
             return
 
         battery, wired = result
         self.battery_str = str(battery)
         self.wired = wired
 
+        # Colour by charge level
+        if battery >= 50:
+            clr = GREEN
+        elif battery >= 20:
+            clr = YELLOW
+        else:
+            clr = RED
+
+        # ── Charging state machine ──
         if wired and battery < 100:
+            # Charging in progress → blink animation
             self.fullcharged = False
             self.stop_animation = False
             if not self.animation_thread.is_alive():
+                self.animation_thread = threading.Thread(
+                    target=self.charge_animation, daemon=True)
                 self.animation_thread.start()
             return
 
         if battery == 100 and wired:
+            # Fully charged on cable → solid green battery icon + notify once
             self.stop_animation = True
             if self.animation_thread.is_alive():
                 self.animation_thread.join()
-            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100_green.ico")), self.get_tooltip())
+            self.tray_icon.SetIcon(
+                wx.Icon(get_resource(R".\icons\battery_100_green.ico")),
+                self.get_tooltip())
             if not self.fullcharged:
                 self.fullcharged = True
-                self.notification.Show(timeout=wx.adv.NotificationMessage.Timeout_Auto)
+                self.notification.Show(
+                    timeout=wx.adv.NotificationMessage.Timeout_Auto)
             return
 
         if battery == 100 and not wired:
+            # Fully charged wireless → record timestamp, green icon
             if self.fullcharged:
                 self.full_charge_date = datetime.now()
                 save_reg(self.full_charge_date.strftime("%d.%m.%Y %H:%M:%S"))
-                logging.info(f"Reset full charge date to: {self.full_charge_date}")
+                logging.info("Reset full charge date → %s", self.full_charge_date)
             self.fullcharged = False
             self.stop_animation = True
-            self.battery_str = str(battery)
-            if self.animation_thread.is_alive():
-                self.animation_thread.join()
-            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100.ico")), self.get_tooltip())
+            self.tray_icon.SetIcon(
+                wx.Icon(get_resource(R".\icons\battery_100_green.ico")),
+                self.get_tooltip())
             return
 
+        # ── Normal wireless discharge → coloured numeric icon ──
         self.fullcharged = False
         self.stop_animation = True
         if self.animation_thread.is_alive():
             self.animation_thread.join()
-        self.tray_icon.SetIcon(create_icon(self.battery_str, foreground_color, font), self.get_tooltip())
+        self.tray_icon.SetIcon(
+            create_icon(self.battery_str, clr, font), self.get_tooltip())
 
-    def charge_animation(self):
+    def charge_animation(self) -> None:
+        """Loop 0 % → 50 % → 100 % icons while ``stop_animation`` is False."""
         while not self.stop_animation:
-            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_0.ico")), self.get_tooltip())
+            self.tray_icon.SetIcon(
+                wx.Icon(get_resource(R".\icons\battery_0.ico")),
+                self.get_tooltip())
             time.sleep(0.5)
-            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_50.ico")), self.get_tooltip())
+            self.tray_icon.SetIcon(
+                wx.Icon(get_resource(R".\icons\battery_50.ico")),
+                self.get_tooltip())
             time.sleep(0.5)
-            self.tray_icon.SetIcon(wx.Icon(get_resource(R".\icons\battery_100.ico")), self.get_tooltip())
+            self.tray_icon.SetIcon(
+                wx.Icon(get_resource(R".\icons\battery_100.ico")),
+                self.get_tooltip())
             time.sleep(0.5)
 
 
 class MyApp(wx.App):
-    def OnInit(self):
+    """wxPython application entry point."""
+
+    def OnInit(self) -> bool:
         frame = MyFrame(None, title="ATK Tray settings")
         frame.Show(False)
         self.SetTopWindow(frame)
         return True
 
 
-def main():
+def main() -> None:
     app = MyApp()
     app.MainLoop()
 
