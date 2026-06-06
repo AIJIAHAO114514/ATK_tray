@@ -326,8 +326,8 @@ class MyTaskBarIcon(TaskBarIcon):
         logging.info("Reset full charge date → %s", self.frame.full_charge_date)
 
     def OnClick(self, event: wx.TaskBarIconEvent) -> None:
-        """Left-click: force a battery refresh if display is stale."""
-        if self.frame.battery_str == "-":
+        """Left-click: force a battery refresh if last read failed."""
+        if self.frame.read_failed:
             self.frame.show_battery()
 
     def OnToggleAutostart(self, event: wx.MenuEvent) -> None:
@@ -353,6 +353,7 @@ class MyFrame(wx.Frame):
         self.full_charge_date = get_reg("FullchargeDate", R"SOFTWARE\ATK_Tray")
         self.battery_str = ""       # currently displayed value ("-", "95", …)
         self.wired = False          # True while charging cable is connected
+        self.read_failed = False    # True when last battery read attempt failed
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         self.Centre()
         self.mouse = detect_mouse()
@@ -399,7 +400,7 @@ class MyFrame(wx.Frame):
 
             self.show_battery()
 
-            if self.battery_str == "-":
+            if self.read_failed:
                 fail_count += 1
                 wait = 3 if fail_count <= 5 else poll_rate
             elif prev_wired and not self.wired:
@@ -414,6 +415,7 @@ class MyFrame(wx.Frame):
     def show_battery(self) -> None:
         """Read the battery and update the tray icon / tooltip."""
         if self.mouse is None:
+            self.read_failed = True
             self.battery_str = "-"
             self.tray_icon.SetIcon(
                 create_icon("-", foreground_color, font), "No Mouse Detected")
@@ -422,15 +424,15 @@ class MyFrame(wx.Frame):
         result = get_battery(self.mouse)
 
         if result is None:
-            self.battery_str = "-"
+            self.read_failed = True
             if hasattr(self, "animation_thread") and self.animation_thread.is_alive():
                 self.stop_animation = True
                 self.animation_thread.join()
-            self.tray_icon.SetIcon(
-                create_icon("-", foreground_color, font), "No Mouse Detected")
+            # Keep last known battery icon — don't overwrite with "-"
             return
 
         battery, wired = result
+        self.read_failed = False
         self.battery_str = str(battery)
         self.wired = wired
 
