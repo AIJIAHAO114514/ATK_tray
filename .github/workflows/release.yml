@@ -1,0 +1,43 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "*.*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --clean --noconsole --noconfirm --onefile `
+            --icon=".\icons\vxe.ico" `
+            --add-data="icons\battery_0.ico;.\icons" `
+            --add-data="icons\battery_50.ico;.\icons" `
+            --add-data="icons\battery_100.ico;.\icons" `
+            --add-binary="hidapi.dll;." `
+            --name=ATK_tray `
+            atk_tray.py
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ATK_tray.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -12,3 +12,6 @@
 !uv.lock
 !.python-version
 !make_release.py
+!.github/
+!.github/**
+!hidapi.dll
