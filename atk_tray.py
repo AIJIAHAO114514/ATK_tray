@@ -15,6 +15,7 @@ import winreg
 from datetime import datetime, timedelta
 
 import hid
+import webbrowser
 import wx
 from PIL import Image, ImageDraw, ImageFont
 from wx.adv import NotificationMessage, TaskBarIcon
@@ -166,7 +167,8 @@ def get_battery(mouse: models.MouseClass) -> tuple[int, bool] | None:
 
     for attempt in range(3):
         try:
-            device = hid.Device(path=device_path)
+            device = hid.device()
+            device.open_path(device_path)
         except Exception as e:
             logging.warning("[attempt %d] open failed: %s", attempt + 1, e)
             time.sleep(0.5)
@@ -181,7 +183,7 @@ def get_battery(mouse: models.MouseClass) -> tuple[int, bool] | None:
                 continue
 
             try:
-                res = device.read(17, timeout=1000)
+                res = device.read(17, timeout_ms=1000)
             except Exception as e:
                 logging.warning("[attempt %d] read failed: %s", attempt + 1, e)
                 time.sleep(0.5)
@@ -304,11 +306,15 @@ class MyTaskBarIcon(TaskBarIcon):
         menu = wx.Menu()
         self.item_autostart = wx.MenuItem(menu, wx.ID_ANY, "Run at startup", kind=wx.ITEM_CHECK)
         self.Bind(wx.EVT_MENU, self.OnToggleAutostart, id=self.item_autostart.GetId())
+        item_vgn = wx.MenuItem(menu, wx.ID_ANY, "VGN控制台")
+        self.Bind(wx.EVT_MENU, self.OnVgnConsole, id=item_vgn.GetId())
         item_reset = wx.MenuItem(menu, wx.ID_ANY, "Reset timer")
         self.Bind(wx.EVT_MENU, self.OnResetTimer, id=item_reset.GetId())
         item_exit = wx.MenuItem(menu, wx.ID_ANY, "Exit")
         self.Bind(wx.EVT_MENU, self.OnTaskBarExit, id=item_exit.GetId())
         menu.Append(self.item_autostart)
+        menu.AppendSeparator()
+        menu.Append(item_vgn)
         menu.AppendSeparator()
         menu.Append(item_reset)
         menu.Append(item_exit)
@@ -324,6 +330,10 @@ class MyTaskBarIcon(TaskBarIcon):
         self.frame.full_charge_date = datetime.now()
         save_reg(self.frame.full_charge_date.strftime("%d.%m.%Y %H:%M:%S"))
         logging.info("Reset full charge date → %s", self.frame.full_charge_date)
+
+    def OnVgnConsole(self, event: wx.MenuEvent) -> None:
+        """Open VGN console in browser."""
+        webbrowser.open("https://hub.vgnlab.com.cn")
 
     def OnClick(self, event: wx.TaskBarIconEvent) -> None:
         """Left-click: force a battery refresh if last read failed."""
@@ -367,8 +377,6 @@ class MyFrame(wx.Frame):
                 title=self.mouse.model, message="Charged 100%")
             self.notification.SetFlags(wx.ICON_INFORMATION)
             self.notification.UseTaskBarIcon(self.tray_icon)
-            self.animation_thread = threading.Thread(
-                target=self.charge_animation, daemon=True)
             self.thread = threading.Thread(
                 target=self.thread_worker, daemon=True)
             self.thread.start()
@@ -436,75 +444,38 @@ class MyFrame(wx.Frame):
         self.battery_str = str(battery)
         self.wired = wired
 
-        # Colour by charge level
-        if battery >= 30:
+        # Colour: green when charging, else by charge level
+        if wired:
+            clr = GREEN
+        elif battery >= 30:
             clr = BLUE
         elif battery >= 10:
             clr = YELLOW
         else:
             clr = RED
 
-        # ── Charging state machine ──
+        # ── Charging state (numeric icons only, no animation) ──
         if wired and battery < 100:
-            # Charging in progress → blink animation
             self.fullcharged = False
-            self.stop_animation = False
-            if not self.animation_thread.is_alive():
-                self.animation_thread = threading.Thread(
-                    target=self.charge_animation, daemon=True)
-                self.animation_thread.start()
-            return
 
         if battery == 100 and wired:
-            # Fully charged on cable → solid blue battery icon + notify once
-            self.stop_animation = True
-            if self.animation_thread.is_alive():
-                self.animation_thread.join()
-            self.tray_icon.SetIcon(
-                wx.Icon(get_resource(R".\icons\battery_100.ico")),
-                self.get_tooltip())
             if not self.fullcharged:
                 self.fullcharged = True
                 self.notification.Show(
                     timeout=wx.adv.NotificationMessage.Timeout_Auto)
-            return
 
         if battery == 100 and not wired:
-            # Fully charged wireless → record timestamp, blue icon
             if self.fullcharged:
                 self.full_charge_date = datetime.now()
                 save_reg(self.full_charge_date.strftime("%d.%m.%Y %H:%M:%S"))
                 logging.info("Reset full charge date → %s", self.full_charge_date)
             self.fullcharged = False
-            self.stop_animation = True
-            self.tray_icon.SetIcon(
-                wx.Icon(get_resource(R".\icons\battery_100.ico")),
-                self.get_tooltip())
-            return
 
-        # ── Normal wireless discharge → coloured numeric icon ──
-        self.fullcharged = False
-        self.stop_animation = True
-        if self.animation_thread.is_alive():
-            self.animation_thread.join()
+        # ── Show numeric icon ──
         self.tray_icon.SetIcon(
             create_icon(self.battery_str, clr, font), self.get_tooltip())
 
-    def charge_animation(self) -> None:
-        """Loop 0 % → 50 % → 100 % icons while ``stop_animation`` is False."""
-        while not self.stop_animation:
-            self.tray_icon.SetIcon(
-                wx.Icon(get_resource(R".\icons\battery_0.ico")),
-                self.get_tooltip())
-            time.sleep(0.5)
-            self.tray_icon.SetIcon(
-                wx.Icon(get_resource(R".\icons\battery_50.ico")),
-                self.get_tooltip())
-            time.sleep(0.5)
-            self.tray_icon.SetIcon(
-                wx.Icon(get_resource(R".\icons\battery_100.ico")),
-                self.get_tooltip())
-            time.sleep(0.5)
+
 
 
 class MyApp(wx.App):
