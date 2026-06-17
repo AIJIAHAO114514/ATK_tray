@@ -335,7 +335,7 @@ class MyTaskBarIcon(TaskBarIcon):
         """Open VGN console in browser."""
         webbrowser.open("https://hub.vgnlab.com.cn")
 
-    def OnClick(self, event: wx.TaskBarIconEvent) -> None:
+    def OnClick(self, event: wx.adv.TaskBarIconEvent) -> None:
         """Left-click: force a battery refresh if last read failed."""
         if self.frame.read_failed:
             self.frame.show_battery()
